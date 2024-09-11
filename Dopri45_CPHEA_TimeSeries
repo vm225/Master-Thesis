@@ -1,0 +1,356 @@
+/* Numerical solutions of the ODE System using Dormand-Prince Algorithm (adaptive step-size RK4(5) Method)
+
+*/
+
+#include <math.h>
+#include<stdio.h>
+#include<stdlib.h>
+#include<unistd.h>
+#include<time.h>
+
+# define dim 6
+# define butcher 7
+
+// maximum and minimum step sizes
+#define HMAX 2.0 //in the scale of a day
+#define HMIN 1e-2
+const double time_f = 100.0;
+
+#define MAX(a,b) ((a)<(b) ? (b):(a))
+#define MIN(a,b) ((a)<(b) ? (a):(b))
+
+//Butcher Tableu
+static double const_c[butcher] = {0., 1./5., 3./10., 4./5., 8./9., 1., 1.};
+static double const_a[butcher-1][butcher-1] = { {1./5.},
+                                                {3./40.,        9./40.},
+                                                {44./45.,       -56./15.,       32./9.},
+                                                {19372./6561.,  -25360./2187.,  64448./6561.,   -212./729.},
+                                                {9017./3168.,	-355./33.,	    46732./5247.,	 49./176.,  	-5103./18656.},
+                                                {35./384.,	    0.,         	500./1113., 	 125./192.,	    -2187./6784.,	11./84.} };
+static double const_b1[butcher] = {35./384.,	0.,	500./1113., 125./192., -2187./6784., 11./84., 0.}; //5 th order solution
+static double const_b2[butcher] = {5179./57600., 0., 7571./16695., 393./640., -92097./339200., 187./2100.,  1./40.}; //4 th order solution
+
+// Dormand Prince RK45
+void dopri45(at, pars, pop, ah, tol, hmin, hmax, n, ode)
+    double *at, *pars, *pop, *ah, tol, hmin, hmax;
+    int n; // dimension of the ODE System
+    //int but; // number of columns in the butcher tableu matrix
+    void (*ode)(double, double[], double[], double[]);
+    {
+    double tpon, err[n], err_est, nor, kh, ath, h1, xpon[n], k[n][butcher], dx[n], x4[n], x5[n];
+    int i;//, m ;
+    register int j ; //j iterates over the populations
+
+
+    // compute the slopes and k[i][j]
+        for( i=0; i<butcher; ++i) {
+            register int j ; //j iterates over the populations
+            int m;
+            //double slope[n];
+            tpon = *at + const_c[i] * *ah; // current time step
+            for(j=0; j<n; xpon[j]=pop[j], ++j); // solution at "last" time step
+            for(m=0; m<i; ++m){
+                //fprintf("%d", slope);
+                //slope[j] = const_a[i][m]*k[j][m];
+                for(j=0; j<dim; xpon[j]+=const_a[i-1][m]*k[j][m], ++j); // update the solution
+            }
+
+            (*ode)(tpon, pars, xpon, dx); // derivative at new solution state
+            for (j=0; j<dim; k[j][i] = dx[j]* *ah, j++); //update the slopes for each solution
+        }
+
+        err_est = 0.0;
+        
+        for (j=0; j<dim; ++j){
+
+            x4[j] = x5[j] = pop[j];
+            for(i = 0; i<butcher; i++){
+                x4[j] += const_b1[i]*k[j][i];
+                x5[j] += const_b2[i]*k[j][i];
+            };
+
+            err[j] = fabs(x5[j]-x4[j]); // truncation error for each dep. variable 
+            if (err_est<err[j]){        // maximum truncation error
+                err_est = err[j];}
+        }
+       
+        h1 = *ah; // current step size //REDUNDANT NO ?
+
+        if(err_est>tol){        /*ah *= pow(((tol* *ah)/(2*err)), (0.20)); // next step size*/
+            *ah *= MIN(hmax, MAX(hmin, 0.8*pow(tol/err_est, 0.20))); // update step size //
+            //if(*ah<1e-2)*ah = 1e-2; //Minimum Step Size //REDUNDANT REMOVE
+            h1 = *ah;
+            // repeat the integration, computation of slopes with the new step size
+            for( i=0; i<butcher; ++i) {
+            register int j ; //j iterates over the solutions
+            int m;
+            //double slope[n];
+            tpon = *at + const_c[i] * *ah;
+            for(j=0; j<n; xpon[j]=pop[j], ++j);
+            for(m=0; m<i; ++m){
+                
+                for(j=0; j<dim; xpon[j]+=const_a[i-1][m]*k[j][m], ++j); 
+            }
+
+            (*ode)(tpon, pars, xpon, dx);
+            for (j=0; j<dim; k[j][i] = dx[j]* *ah, j++); //slopes for solution j
+        }
+
+        err_est = 0.0;
+
+        // repeat the step adjusting the step size, updating the populations 
+        
+        for (j=0; j<dim; ++j){
+
+            x4[j] = x5[j] = pop[j];
+            for(i = 0; i<butcher; i++){
+                x4[j] += const_b1[i]*k[j][i];
+                x5[j] += const_b2[i]*k[j][i];
+            };
+           
+            err[j] = fabs(x5[j]-x4[j]); // truncation error for each variable
+            if (err_est<err[j]){        // define the error as the maximum 
+                err_est = err[j];}
+        }
+            }
+        else if(err_est <= tol){
+        *ah *= HMAX;}  // error estimate smaller tha estimate, choose larger step size 
+
+   
+    *at += h1; // update time (with the current time step)
+    //printf("%lf", h1);
+    //avoid overshooting t_final:
+    if((time_f-*at-*ah)<(1e-30)){
+        *ah = time_f-*at;
+    };
+    for(j=0; j<n; pop[j]=x5[j], ++j); //update the solutions 
+   
+}
+
+double rand_range(double a, double b) //random number beween (a, b)
+{
+  return(drand48()*(b-a) + a);
+}
+
+
+void ode(double t, double pars[], double pop[dim], double dt_pop[dim]){
+// attack rate functions
+    double fct_theta_C2_C1 =( pars[7]/(1.0 + pars[42]*pop[4]));
+    double fct_theta_C2_P = (pars[8]/(1.0 + pars[43]*pop[4]));
+    double fct_theta_C1_H = (pars[9]/(1.0 + pars[44]*pop[4] + pars[45]*pop[5]));
+    double fct_theta_P_H = (pars[10]/(1.0 + pars[44]*pop[4] + pars[45]*pop[5]));
+    double fct_theta_H_A = pars[11]; //no sheltering effect
+
+    // larval cod producement from adult cods
+    double produced_C0 = ((pars[0]*fct_theta_C2_C1*pop[0] + pars[1]*fct_theta_C2_P*pop[2])
+                        /(1 + fct_theta_C2_C1*pars[12]*pop[0] + fct_theta_C2_P*pars[13]*pop[2]));
+
+    // transition function (juveniles maturing into adult cod)
+    double tr_C1_C2 = ((1.0*pars[3]*pop[3])/(1 + fct_theta_C1_H*pars[14]*pop[3]));
+
+    // Holling Type 2 response functions
+
+    double D_Holling_C1 = ((fct_theta_C2_C1*pop[1])/(1 + fct_theta_C2_C1*pars[12]*pop[0]
+                        + fct_theta_C2_P*pars[13]*pop[2]));
+
+    double Holling_P =  ((pars[4]*fct_theta_P_H*pop[3])/(1 + fct_theta_P_H*pars[15]*pop[3]));
+    double D_Holling_P = ((fct_theta_C2_P*pop[1])/(1+fct_theta_C2_P*pars[13]*pop[2]
+                        +fct_theta_C2_C1*pars[12]*pop[0]));
+
+    double Holling_H = ((pars[5]*fct_theta_H_A*pop[5])/(1 + fct_theta_H_A*pars[16]*pop[5]));
+    double D1_Holling_H = ((fct_theta_P_H*pop[2])/(1 + fct_theta_P_H*pars[15]*pop[3]));
+    double D2_Holling_H = ((fct_theta_C1_H*pop[0])/(1+fct_theta_C1_H*pars[14]*pop[3]));
+
+    double D_Holling_A = ((fct_theta_H_A*pop[3])/(1+fct_theta_H_A*pars[16]*pop[5]));
+
+    // Growth Functions
+    double Gamma_E = ((pars[47] + pars[20]*pars[38])/(1+pars[22]*pop[5]));
+    double Gamma_A = ((pars[21]*pars[38])/(1+pars[23]*pop[5]));
+
+
+
+    // derivatives of populations dt_pop[0]:C_1, dt_pop[1]:C_2, dt_pop[2]:P, dt_pop[3]:H, dt_pop[4]:E, dt_pop[5]:A
+
+    dt_pop[0] = pars[17]*(produced_C0*pop[1] + pars[2]*pars[6]*pop[1]) - (pars[3]*tr_C1_C2*pop[0]) - (pars[33]*pop[0]) - (pars[40]*pop[0])
+                - (pars[27]*pop[0]*pop[0]) - (pars[28]*pop[0]*pop[2]) - (D_Holling_C1*pop[0]);
+
+    dt_pop[1] = tr_C1_C2*pop[0] - pars[32]*pop[1] - pars[39]*pop[1] - pars[26]*pop[1]*pop[1];
+
+    dt_pop[2] = Holling_P*pop[2] - pars[34]*pop[2] - pars[30]*pop[2]*pop[2] - pars[29]*pop[2]*pop[0] - D_Holling_P*pop[2];
+
+    dt_pop[3] = Holling_H*pop[3] - pars[35]*pop[3] - pars[31]*pop[3]*pop[3] - D1_Holling_H*pop[3] -D2_Holling_H*pop[3];
+
+    dt_pop[4] = (Gamma_E*pop[4]*(1-(pop[4]/(pars[46]*pars[25]))))-(pars[37]*pop[4])-pars[41]*pop[4]-pars[18]*pop[2]*pop[4]-pars[48]*pop[4]*pop[5];
+
+    dt_pop[5] = (Gamma_A*pop[5]*(1-(pop[5]/(pars[24]+pars[19]*pop[4])))) - D_Holling_A*pop[5] -pars[36]*pop[5];
+
+}
+
+
+int main(void){
+    int num_pars = 49;
+    double x[dim];
+    double pars[num_pars];
+    //double mc_max = 1e5; // number of MC Simulations 
+    long int seed = -1; //random seed for drand48
+    srand48(seed==-1 ? (long)(time(0)+getpid()):seed);
+   
+    
+    FILE *f0 = fopen("Dopri45_CPHEA_MC1e5_C1_TS_.txt", "w");
+    FILE *f1 = fopen("Dopri45_CPHEA_MC1e5_C2_TS_.txt", "w");
+    FILE *f2 = fopen("Dopri45_CPHEA_MC1e5_P_TS_.txt", "w");
+    FILE *f3 = fopen("Dopri45_CPHEA_MC1e5_H_TS_.txt", "w");
+    FILE *f4 = fopen("Dopri45_CPHEA_MC1e5_E_TS_.txt", "w");
+    FILE *f5 = fopen("Dopri45_CPHEA_MC1e5_A_TS_.txt", "w");
+    FILE *f6 = fopen("Dopri45_CPHEA_MC1e5_pars_TS_.txt", "w");
+    
+  
+    double time = .0; //starting time
+    double time_f = 100.0; //final time
+
+    double pas = 1e-2; //step size
+    double eps = 1e-13; //tolerance
+
+    double hmax, hmin;
+    hmin=HMIN; hmax=HMAX;
+
+    double ext_th = 1e-13; //extinction threshold
+        // Initial Conditions 
+    
+        x[0] = 0.0584; //Juvenile Cod ton/km^2 // might be higher in Oresund
+        x[1] = 0.182; //Adult Cod ton/km^2
+        x[2] = 6.0; //Mesopredators ton/km^2
+        x[3] = 5.0; //Mesoherbivores ton/km^2
+        x[4] = 500.0; //Eelgrass km^2
+        x[5] = 675.0; //Algae
+
+        // Parameters
+        // conversion efficiencies
+        pars[0] = 0.71;  //α_CL_C1 // the efficiency with which food cons by adult cod is conv into larval biomass
+        pars[1] = 0.09;  //α_CL_P // α_C0_C1 value  that we use is independent of the prey typ so we should use the same
+        pars[2] = 0.23;  //α_CL_h
+        pars[3] = 0.25;  //α_C1_H
+        pars[4] = 0.23; //α_P_H // growth and reproduction (table value)
+        pars[5] = 0.11; //α_H_A
+
+        // herring population
+        pars[6] =  0.13043; //Ψ
+
+        // attack rates
+        // attack rate on juvenile cod is too high
+
+        pars[7] = 0.54; //θ_C2_C1 
+        pars[8] =  0.56;//θ_C2_P
+        pars[9] =  1.06;//θ_C1_H
+        pars[10] = 2.0;//0.69;//1.08; //θ_P_H
+        pars[11] = 2.30;//1.54;//2.30; //θ_H_A
+
+        // handling times
+        pars[12] = 0.068; //τ_C2_C1
+        pars[13] =  0.052;//τ_C2_P
+        pars[14] =  0.047;//τ_C1_H
+        pars[15] = 0.031; //τ_P_H
+        pars[16] = 0.0294; //τ_H_A
+
+        // transition rate from larval to juvenile cod:
+        pars[17] =  0.9;//χ_0_1 , was set to 1
+
+        // negative impact on eelgrass:
+        pars[18] = 0.0075; //θ_P_E //rand_range(1e-8,1e-6); // is this not too high ? set lower range also
+
+        // carrying capacity per unit area of eelgrass:
+        pars[19] = 0.5761;//0.5761; //r_E_A
+
+
+        // growth rates of eelgrass and algae:
+        pars[20] = 0.568e-3; //γ_E_N , growth rate stimulus coefficient, probably too low (?)
+        pars[21] = 3.735; //γ_A_N , growth rate stimulus coefficient
+
+        // growth inhibition due to shadowing:
+        pars[22] = 0.0049;  //ξ_E_A
+        pars[23] = 0.0014;  //ξ_A_A
+
+        // carrying capacities:
+        pars[24] = 1325.0;//1325.0; //K_A //ton/km^2
+        pars[25] = 987.0873;//rand_range(900,1000);//987.0873; //K_E
+
+        // intra- und interspecific competition strength: (no reference)
+        pars[26] = 1e-4;//κ_C2_C2
+        pars[27] =  1e-3;//κ_C1_C1
+        pars[28] =  0.1;//κ_C1_P
+        pars[29] =  0.1;//κ_P_C1 
+        pars[30] = 1e-3;//κ_P_P
+        pars[31] = 1e-3; //κ_H_H
+
+        // intrinsic death rates:
+        pars[32] = 0.08; //υ_C2
+        pars[33] = 0.120; //υ_C1
+        pars[34] = 0.22; //υ_P
+        pars[35] = 0.83; //υ_H 
+        pars[36] = 14.61; //υ_A, range was not set in the word document, as almost all die (but this is exp) 
+        pars[37] = 0.1; //υ_E, CHANGED !!!!!!
+
+        // nitrogen concentration:
+        pars[38] = 5.7421; //N
+
+        // fishing rates:
+        pars[39] = 0.0;//η_C2
+        pars[40] = 0.0;//η_C1
+
+        // eelgrass degradation:
+        pars[41] = 0.1; //η_E
+
+        // reduction coefficient of attack rates:
+        // should be modified I think
+        pars[42] =  1.087e-3; //w_E_C1 // excel value multiplied by 10^6 (km^2)
+        pars[43] =  1.087e-3;//w_E_P
+        pars[44] = 2.006e-3;//w_E_H
+        pars[45] =  1e-3;//w_A_H
+
+        // available habitat for eelgrass:
+        pars[46] = 1.0; //ω_E // if the carying capacity is in area this can be set to 1
+
+        //two parameters were removed, added back
+        pars[47] = 1.5;  //gamma_E, intrinsic growth
+        pars[48] = 1e-3; //theta_AE, small
+
+         do{
+    
+    
+  
+    dopri45(&time, pars, x, &pas, eps, hmin, hmax, dim, ode);
+        //printf("HELLO I CANT DEBUG BETTER");
+        int ind_pop; //index of the population
+        for(ind_pop=0; ind_pop<dim; ind_pop++)
+            if(x[ind_pop]<=ext_th)
+                x[ind_pop] = 0.0;
+
+    fprintf(f0,"%.13lf %.13lf\n",time,x[0]);
+    fprintf(f1,"%.13lf %.13lf\n",time,x[1]);
+    fprintf(f2,"%.13lf %.13lf\n",time,x[2]);
+    fprintf(f3,"%.13lf %.13lf\n",time,x[3]);
+    fprintf(f4,"%.13lf %.13lf\n",time,x[4]);
+    fprintf(f5,"%.13lf %.13lf\n",time,x[5]);
+    
+
+    printf("%.13lf\n", time);
+    printf(" %.13lf\n",x[0]);
+    printf(" %.13lf\n",x[1]);
+    printf(" %.13lf\n",x[2]);
+    printf(" %.13lf\n",x[3]);
+    printf(" %.13lf\n",x[4]);
+    printf(" %.13lf\n",x[5]);
+        
+    }while (time<time_f);
+     printf(" C1 =  %.13lf\n C2 =  %.13lf\n P =  %.13lf\n H =  %.13lf\n  E = %.13lf\n A = %.13lf\n",
+          x[0], x[1], x[2], x[3], x[4], x[5]);
+
+    
+    
+    for(int it_par = 0; it_par< num_pars; it_par++){
+        fprintf(f6, "%.8lf\n",pars[it_par]);};
+         
+          
+            
+    return(0);
+}
